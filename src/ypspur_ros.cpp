@@ -94,7 +94,7 @@ private:
   int key_;
   bool simulate_;
   bool simulate_control_;
-
+  bool publish_ypspur_odom_;
   double tf_time_offset_;
 
   pid_t pid_;
@@ -467,6 +467,7 @@ public:
     pnh_.param("ypspur_bin", ypspur_bin_, std::string("ypspur-coordinator"));
     pnh_.param("param_file", param_file_, std::string(""));
     pnh_.param("tf_time_offset", tf_time_offset_, 0.0);
+    pnh_.param("publish_ypspur_odom", publish_ypspur_odom_, false);
 
     double cmd_vel_expire_s;
     pnh_.param("cmd_vel_expire", cmd_vel_expire_s, -1.0);
@@ -884,14 +885,20 @@ public:
         odom.twist.twist.linear.x = v;
         odom.twist.twist.linear.y = 0;
         odom.twist.twist.angular.z = w;
-        pubs_["odom"].publish(odom);
+
+        if (publish_ypspur_odom_) {
+          pubs_["odom"].publish(odom);
+        }
 
         odom_trans.header.stamp = ros::Time(t) + ros::Duration(tf_time_offset_);
         odom_trans.transform.translation.x = x;
         odom_trans.transform.translation.y = y;
         odom_trans.transform.translation.z = 0;
         odom_trans.transform.rotation = tf::createQuaternionMsgFromYaw(yaw);
-        tf_broadcaster_.sendTransform(odom_trans);
+        
+        if (publish_ypspur_odom_) {        
+          tf_broadcaster_.sendTransform(odom_trans);
+        }
 
         t = YP::YPSpur_get_force(&wrench.wrench.force.x, &wrench.wrench.torque.z);
         if (t == 0.0)
