@@ -1,99 +1,141 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(ypspur_ros)
 
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  message_generation
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
 
-  diagnostic_msgs
-  geometry_msgs
-  nav_msgs
-  sensor_msgs
-  std_msgs
-  tf2
-  tf2_geometry_msgs
-  tf2_ros
-  trajectory_msgs
+#########################
+#
+# find dependencies
+#
+#########################
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(trajectory_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/DigitalOutput.msg"
+  "msg/DigitalInput.msg"
+  "msg/ControlMode.msg"
+  "msg/JointPositionControl.msg"
+  DEPENDENCIES builtin_interfaces std_msgs
 )
+ament_export_dependencies(rosidl_default_runtime)
 
-add_message_files(
-  FILES
-  DigitalOutput.msg
-  DigitalInput.msg
-  ControlMode.msg
-  JointPositionControl.msg
-)
+find_package(glog REQUIRED)
+find_package(ypspur REQUIRED)
 
-generate_messages(
-  DEPENDENCIES
-  std_msgs
-)
-
-catkin_package(CATKIN_DEPENDS
-  roscpp
-  message_runtime
-
-  diagnostic_msgs
-  geometry_msgs
-  nav_msgs
-  sensor_msgs
-  std_msgs
-  tf2
-  tf2_geometry_msgs
-  tf2_ros
-  trajectory_msgs
-)
-find_package(Boost REQUIRED COMPONENTS chrono thread atomic REQUIRED)
-
-find_package(ypspur 1.20.0 REQUIRED)
-
-###########
-## Build ##
-###########
-
-set(CMAKE_CXX_STANDARD 14)
-
+#########################
+#
+# solve directory
+#
+#########################
 include_directories(
   include
-  ${catkin_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIRS}
   ${ypspur_INCLUDE_DIRS}
 )
 
-add_executable(ypspur_ros src/ypspur_ros.cpp)
-target_link_libraries(ypspur_ros
-  ${catkin_LIBRARIES}
-  ypspur
-)
-add_dependencies(ypspur_ros ${ypspur_ros_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
+#########################
+# joint_tf_publisher
+#########################
 add_executable(joint_tf_publisher src/joint_tf_publisher.cpp)
-target_link_libraries(joint_tf_publisher ${catkin_LIBRARIES})
-add_dependencies(joint_tf_publisher ${ypspur_ros_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(joint_tf_publisher 
+  glog::glog
+)
+ament_target_dependencies(joint_tf_publisher
+  rclcpp
+  builtin_interfaces
+  sensor_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
 
+#########################
+# ypspur_ros_node
+#########################
+add_executable(ypspur_ros_node src/ypspur_ros.cpp)
+target_link_libraries(ypspur_ros_node 
+  ypspur
+  glog::glog
+)
+ament_target_dependencies(ypspur_ros_node
+  rclcpp
+  builtin_interfaces
+  std_msgs
+  sensor_msgs
+  trajectory_msgs
+  diagnostic_msgs
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME} rosidl_typesupport_cpp)
+target_link_libraries(ypspur_ros_node "${cpp_typesupport_target}")
+
+#########################
+# joint_position_to_joint_trajectory
+#########################
 add_executable(joint_position_to_joint_trajectory src/joint_position_to_joint_trajectory.cpp)
-target_link_libraries(joint_position_to_joint_trajectory ${catkin_LIBRARIES})
-add_dependencies(joint_position_to_joint_trajectory ${ypspur_ros_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(joint_position_to_joint_trajectory 
+  ypspur
+  glog::glog
+)
+ament_target_dependencies(joint_position_to_joint_trajectory
+  rclcpp
+  builtin_interfaces
+  std_msgs
+  sensor_msgs
+  tf2
+  tf2_ros
+  trajectory_msgs
+)
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME} rosidl_typesupport_cpp)
+target_link_libraries(joint_position_to_joint_trajectory "${cpp_typesupport_target}")
 
 #############
 ## Install ##
 #############
 
 install(TARGETS
-    ypspur_ros
-    joint_tf_publisher
-    joint_position_to_joint_trajectory
-  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  ypspur_ros_node
+  joint_tf_publisher
+  joint_position_to_joint_trajectory
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+  LIBRARY DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 #############
 ## Testing ##
 #############
 
-if(CATKIN_ENABLE_TESTING)
-  add_subdirectory(test)
-  find_package(roslint REQUIRED)
-  roslint_cpp()
-  roslint_add_test()
-endif()
+# if(CATKIN_ENABLE_TESTING)
+#   add_subdirectory(test)
+#   find_package(roslint REQUIRED)
+#   roslint_cpp()
+#   roslint_add_test()
+# endif()
+
+ament_package()

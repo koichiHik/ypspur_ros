@@ -1,5 +1,5 @@
 uint8 output
-duration toggle_time
+builtin_interfaces/Duration toggle_time
 
 uint8 HIGH_IMPEDANCE=0
 uint8 LOW=1

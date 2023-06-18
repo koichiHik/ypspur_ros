@@ -1,3 +1,4 @@
+// clang-format off
 /*
  * Copyright (c) 2015-2017, the ypspur_ros authors
  * All rights reserved.
@@ -27,40 +28,63 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <ros/ros.h>
+// ROS
+#include "rclcpp/rclcpp.hpp"
 
-#include <sensor_msgs/JointState.h>
-#include <trajectory_msgs/JointTrajectory.h>
-#include <ypspur_ros/JointPositionControl.h>
+// Messages.
+#include "sensor_msgs/msg/joint_state.hpp"
+#include "trajectory_msgs/msg/joint_trajectory.hpp"
 
+// Original
+// #include "ypspur_ros/compatibility.h"
+#include "ypspur_ros/msg/joint_position_control.hpp"
+
+// Google
+#include <glog/logging.h>
+
+// STL
 #include <map>
 #include <string>
 
-#include <compatibility.h>
+static const std::string NODE_NAME = "joint_position_to_joint_trajectory";
+static const std::string SUBSCRIBE_TOPIC_JOINT_POSITION = "joint_position";
+static const std::string SUBSCRIBE_TOPIC_JOINT_STATE = "joint_states";
+static const std::string PUBLISH_TOPIC_JOINT_TRAJECTORY = "joint_trajectory";
 
-class ConvertNode
-{
-private:
-  ros::NodeHandle nh_;
-  ros::NodeHandle pnh_;
-  ros::Subscriber sub_joint_;
-  ros::Subscriber sub_joint_state_;
-  ros::Publisher pub_joint_;
+static const int DEFAULT_QUEUE_SIZE = 5;
 
+class ConvertNode : public rclcpp::Node {
+ private:
+  struct Params {
+    double accel_;
+    bool skip_same_;
+  };
+
+ private:
+  // X. State
+  Params params_;
   std::map<std::string, double> state_;
 
-  double accel_;
-  bool skip_same_;
+  // X. Publishers
+  rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr
+      p_pub_joint_traj_;
 
-  void cbJointState(const sensor_msgs::JointState::ConstPtr& msg)
+  // X. Subscribers
+  rclcpp::Subscription<ypspur_ros::msg::JointPositionControl>::SharedPtr
+      p_sub_joint_pos_ctrl_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr
+      p_sub_joint_state_;
+
+ private:
+  void cbJointState(const sensor_msgs::msg::JointState::ConstSharedPtr& msg)
   {
     for (size_t i = 0; i < msg->name.size(); i++)
     {
       state_[msg->name[i]] = msg->position[i];
     }
   }
-  ypspur_ros::JointPositionControl cmd_prev;
-  void cbJointPosition(const ypspur_ros::JointPositionControl::ConstPtr& msg)
+  ypspur_ros::msg::JointPositionControl cmd_prev;
+  void cbJointPosition(const ypspur_ros::msg::JointPositionControl::ConstSharedPtr& msg)
   {
     while (true)
     {
@@ -76,7 +100,7 @@ private:
         if (!eq)
           break;
       }
-      if (msg->positions.size() != cmd_prev.positions.size())
+      if (msg->positions.size() != cmd_prev.positions.size()) 
         break;
       {
         bool eq = true;
@@ -116,7 +140,7 @@ private:
     }
     cmd_prev = *msg;
 
-    trajectory_msgs::JointTrajectory cmd;
+    trajectory_msgs::msg::JointTrajectory cmd;
     cmd.header = msg->header;
     cmd.joint_names = msg->joint_names;
     cmd.points.resize(1);
@@ -134,37 +158,49 @@ private:
 
       i++;
     }
-    cmd.points[0].time_from_start = ros::Duration(t_max);
+    cmd.points[0].time_from_start = rclcpp::Duration::from_seconds(t_max);
 
-    pub_joint_.publish(cmd);
+    p_pub_joint_traj_->publish(cmd);
   }
 
-public:
-  ConvertNode()
-    : nh_()
-    , pnh_("~")
-  {
-    sub_joint_ = compat::subscribe(
-        nh_, "joint_position",
-        pnh_, "joint_position", 5, &ConvertNode::cbJointPosition, this);
-    sub_joint_state_ = compat::subscribe(
-        nh_, "joint_states",
-        pnh_, "joint", 5, &ConvertNode::cbJointState, this);
-    pub_joint_ = compat::advertise<trajectory_msgs::JointTrajectory>(
-        nh_, "joint_trajectory",
-        pnh_, "joint_trajectory", 5, false);
+ public:
+  ConvertNode(const rclcpp::NodeOptions& options)
+      : Node(NODE_NAME,
+             rclcpp::NodeOptions(options)
+                 .allow_undeclared_parameters(true)
+                 .automatically_declare_parameters_from_overrides(true)) {
+    CHECK(this->get_parameter("accel", params_.accel_));
+    CHECK(this->get_parameter("skip_same", params_.skip_same_));
 
-    pnh_.param("accel", accel_, 0.3);
-    pnh_.param("skip_same", skip_same_, true);
+    // X. Register publishers.
+    p_pub_joint_traj_ =
+        this->create_publisher<trajectory_msgs::msg::JointTrajectory>(
+            PUBLISH_TOPIC_JOINT_TRAJECTORY,
+            rclcpp::QoS(rclcpp::KeepLast(DEFAULT_QUEUE_SIZE)));
+
+    // X. Register subscribers.
+    p_sub_joint_state_ =
+        this->create_subscription<sensor_msgs::msg::JointState>(
+            SUBSCRIBE_TOPIC_JOINT_STATE,
+            rclcpp::QoS(rclcpp::KeepLast(DEFAULT_QUEUE_SIZE)),
+            std::bind(&ConvertNode::cbJointState, this, std::placeholders::_1));
+    p_sub_joint_pos_ctrl_ =
+        this->create_subscription<ypspur_ros::msg::JointPositionControl>(
+            SUBSCRIBE_TOPIC_JOINT_POSITION,
+            rclcpp::QoS(rclcpp::KeepLast(DEFAULT_QUEUE_SIZE)),
+            std::bind(&ConvertNode::cbJointPosition, this,
+                      std::placeholders::_1));
   }
 };
 
-int main(int argc, char* argv[])
+int main(int argc, char* argv[]) 
 {
-  ros::init(argc, argv, "joint_position_to_joint_trajectory");
+  rclcpp::init(argc, argv);
 
-  ConvertNode conv;
-  ros::spin();
+  ConvertNode conv(rclcpp::NodeOptions{});
+  rclcpp::spin(conv.shared_from_this());
 
   return 0;
 }
+
+// clang-format on

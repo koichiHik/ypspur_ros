@@ -1,3 +1,4 @@
+// clang-format off
 /*
  * Copyright (c) 2015-2017, the ypspur_ros authors
  * All rights reserved.
@@ -27,63 +28,68 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <ros/ros.h>
+// Message (ROS)
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
-#include <geometry_msgs/TransformStamped.h>
-#include <sensor_msgs/JointState.h>
+// ROS
+#include "rclcpp/rclcpp.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
-#include <tf2_ros/transform_broadcaster.h>
-
+// System
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+
+// STL
 #include <map>
 #include <string>
 
-#include <compatibility.h>
-
-class JointTfPublisherNode
-{
-private:
-  ros::NodeHandle nh_;
-  ros::NodeHandle pnh_;
-  std::map<std::string, ros::Subscriber> subs_;
-  tf2_ros::TransformBroadcaster tf_broadcaster_;
+class JointTfPublisherNode : public rclcpp::Node {
+ private:
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr p_sub_jnt_state_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> p_tf_broadcaster_;
   const tf2::Vector3 z_axis_;
 
-  void cbJoint(const sensor_msgs::JointState::ConstPtr& msg)
-  {
+  void cbJoint(const sensor_msgs::msg::JointState::ConstSharedPtr& msg) {
     for (size_t i = 0; i < msg->name.size(); i++)
     {
-      geometry_msgs::TransformStamped trans;
+      geometry_msgs::msg::TransformStamped trans;
       trans.header = msg->header;
       trans.header.frame_id = msg->name[i] + "_in";
       trans.child_frame_id = msg->name[i] + "_out";
 
       trans.transform.rotation = tf2::toMsg(tf2::Quaternion(z_axis_, msg->position[i]));
-      tf_broadcaster_.sendTransform(trans);
+      p_tf_broadcaster_->sendTransform(trans);
     }
   }
 
-public:
-  JointTfPublisherNode()
-    : nh_()
-    , pnh_("~")
+ public:
+  JointTfPublisherNode(const rclcpp::NodeOptions &options)
+    : Node("joint_tf_publisher", 
+           rclcpp::NodeOptions(options)
+               .allow_undeclared_parameters(true)
+               .automatically_declare_parameters_from_overrides(true))
+    , p_tf_broadcaster_{}
     , z_axis_(0, 0, 1)
   {
-    subs_["joint"] = compat::subscribe(
-        nh_, "joint_states",
-        pnh_, "joint", 1, &JointTfPublisherNode::cbJoint, this);
+    p_tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
+
+    // X. Subscriber.
+    p_sub_jnt_state_ = this->create_subscription<sensor_msgs::msg::JointState>(
+      "joint_states", rclcpp::QoS(rclcpp::KeepLast(1)), 
+      std::bind(&JointTfPublisherNode::cbJoint, this, std::placeholders::_1));
   }
 };
 
 int main(int argc, char* argv[])
 {
-  ros::init(argc, argv, "joint_tf_publisher");
+  rclcpp::init(argc, argv);
 
-  JointTfPublisherNode jp;
-  ros::spin();
+  JointTfPublisherNode jp(rclcpp::NodeOptions{});
+  rclcpp::spin(jp.shared_from_this());
 
   return 0;
 }
+// clang-format on
