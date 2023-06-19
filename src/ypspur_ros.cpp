@@ -82,6 +82,27 @@ namespace YP
 #include <ypspur.h>
 }  // namespace YP
 
+/**
+ * Constant definition.
+ */
+const std::string NODE_NAME = "ypspur_ros";
+
+// X. Pubslish
+const std::string PUBLISH_TOPIC_DIGITAL_INPUT= "digital_input";
+const std::string PUBLISH_TOPIC_WRENCH_STAMPED = "wrench";
+const std::string PUBLISH_TOPIC_ODOM = "odom";
+const std::string PUBLISH_TOPIC_JOINT_STATES = "joint_states";
+const std::string PUBLISH_TOPIC_DIAGNOSTICS = "diagnostics";
+
+// X. Subscribe.
+const std::string SUBSCRIBE_TOPIC_COMMAND_VELOCITY = "cmd_vel";
+const std::string SUBSCRIBE_TOPIC_JOINTSTATE = "joint_position";
+const std::string SUBSCRIBE_TOPIC_JOINT_TRAJECTORY = "joint_trajectory";
+const std::string SUBSCRIBE_TOPIC_CONTROL_MODE = "control_mode";
+
+/**
+ * Definition at file scope.
+ */
 bool g_shutdown = false;
 void sigintHandler(int)
 {
@@ -89,15 +110,15 @@ void sigintHandler(int)
 }
 
 template <typename T>
-T read_parameter(rclcpp::Node &node, const std::string &param_name, 
-  const T& default_val) {
-  node.declare_parameter(param_name, default_val);
-
+T read_parameter_or_die(rclcpp::Node &node, const std::string &param_name) {
   T value;
   CHECK(node.get_parameter(param_name, value));
   return value;
 }
 
+/**
+ * Definition and implementation of YpspurRosNode.
+ */
 class YpspurRosNode : public rclcpp::Node 
 {
 private:
@@ -464,7 +485,7 @@ private:
 
 public:
   YpspurRosNode(const rclcpp::NodeOptions& options) 
-    : Node("ypspur_ros_node", 
+    : Node(NODE_NAME, 
            rclcpp::NodeOptions(options)
                .allow_undeclared_parameters(true)
                .automatically_declare_parameters_from_overrides(true))
@@ -525,18 +546,26 @@ public:
     //compat::checkCompatMode();
 
     // X. Read parameters.
-    port_ = read_parameter<std::string>(*this, "port", std::string("/dev/ttyACM0"));
-    key_ = read_parameter<int>(*this, "ipc_key", 28741);
-    simulate_ = read_parameter<bool>(*this, "simulate", false);
-    simulate_control_ = read_parameter<bool>(*this, "simulate_control", false);
+    // port_ = read_parameter<std::string>(*this, "port", std::string("/dev/ttyACM0"));
+    port_ = read_parameter_or_die<std::string>(*this, "port");
+    // key_ = read_parameter<int>(*this, "ipc_key", 28741);
+    key_ = read_parameter_or_die<int>(*this, "ipc_key");
+    // simulate_ = read_parameter<bool>(*this, "simulate", false);
+    simulate_ = read_parameter_or_die<bool>(*this, "simulate");
+    // simulate_control_ = read_parameter<bool>(*this, "simulate_control", false);
+    simulate_control_ = read_parameter_or_die<bool>(*this, "simulate_control");
     if (simulate_control_) {
       simulate_ = true;      
     }
-    ypspur_bin_ = read_parameter<std::string>(*this, "ypspur_bin", std::string("ypspur-coordinator"));
-    param_file_ = read_parameter<std::string>(*this, "param_file", std::string(""));
-    tf_time_offset_ = read_parameter<double>(*this, "tf_time_offset", 0.0);
+    // ypspur_bin_ = read_parameter<std::string>(*this, "ypspur_bin", std::string("ypspur-coordinator"));
+    ypspur_bin_ = read_parameter_or_die<std::string>(*this, "ypspur_bin");
+    // param_file_ = read_parameter<std::string>(*this, "param_file", std::string(""));
+    param_file_ = read_parameter_or_die<std::string>(*this, "param_file");
+    // tf_time_offset_ = read_parameter<double>(*this, "tf_time_offset", 0.0);
+    tf_time_offset_ = read_parameter_or_die<double>(*this, "tf_time_offset");
     {
-      double cmd_vel_expire_s = read_parameter<double>(*this, "cmd_vel_expire", -1.0);
+      //double cmd_vel_expire_s = read_parameter<double>(*this, "cmd_vel_expire", -1.0);
+      double cmd_vel_expire_s = read_parameter_or_die<double>(*this, "cmd_vel_expire");
       cmd_vel_expire_ = rclcpp::Duration::from_seconds(cmd_vel_expire_s);
     }
 
@@ -545,19 +574,26 @@ public:
     ads_.resize(AD_NUM_);
     for (int i = 0; i < AD_NUM_; i++)
     {
-      ads_[i].enable_ = read_parameter<bool>(
-        *this, std::string("ad") + std::to_string(i) + std::string("_enable"),
-          false);
-      ads_[i].name_ = read_parameter<std::string>(
-        *this, std::string("ad") + std::to_string(i) + std::string("_name"),
-        std::string("ad") + std::to_string(i));
-      ads_[i].gain_ = read_parameter<double>(
-        *this, std::string("ad") + std::to_string(i) + std::string("_gain"),
-        1.0);
-      ads_[i].offset_ = read_parameter<double>(
-        *this, std::string("ad") + std::to_string(i) + std::string("_offset"),
-        0.0);
-
+      // ads_[i].enable_ = read_parameter<bool>(
+      //   *this, std::string("ad") + std::to_string(i) + std::string("_enable"),
+      //     false);
+      ads_[i].enable_ = read_parameter_or_die<bool>(
+        *this, std::string("ad") + std::to_string(i) + std::string("_enable"));
+      // ads_[i].name_ = read_parameter<std::string>(
+      //   *this, std::string("ad") + std::to_string(i) + std::string("_name"),
+      //   std::string("ad") + std::to_string(i));
+      ads_[i].name_ = read_parameter_or_die<std::string>(
+        *this, std::string("ad") + std::to_string(i) + std::string("_name"));
+      // ads_[i].gain_ = read_parameter<double>(
+      //   *this, std::string("ad") + std::to_string(i) + std::string("_gain"),
+      //   1.0);
+      ads_[i].gain_ = read_parameter_or_die<double>(
+        *this, std::string("ad") + std::to_string(i) + std::string("_gain"));
+      // ads_[i].offset_ = read_parameter<double>(
+      //   *this, std::string("ad") + std::to_string(i) + std::string("_offset"),
+      //   0.0);
+      ads_[i].offset_ = read_parameter_or_die<double>(
+        *this, std::string("ad") + std::to_string(i) + std::string("_offset"));
       ad_mask = (ads_[i].enable_ ? std::string("1") : std::string("0")) + ad_mask;
       p_pubs_ad_values_.insert(
         std::make_pair("ad/" + ads_[i].name_,
@@ -572,19 +608,27 @@ public:
     for (int i = 0; i < DIO_NUM_; i++)
     {
       DioParams param;
-      param.enable_ = read_parameter<bool>(
-        *this, std::string("dio") + std::to_string(i) + std::string("_enable"), false);
+      // param.enable_ = read_parameter<bool>(
+      //   *this, std::string("dio") + std::to_string(i) + std::string("_enable"), false);
+      param.enable_ = read_parameter_or_die<bool>(
+        *this, std::string("dio") + std::to_string(i) + std::string("_enable"));
       if (param.enable_) 
       {
-        param.name_ = read_parameter<std::string>(
-          *this, std::string("dio") + std::to_string(i) + std::string("_name"),
-          std::string("dio") + std::to_string(i));
-        param.output_ = read_parameter<bool>(
-          *this, std::string("dio") + std::to_string(i) + std::string("_output"),
-          true);
-        param.input_ = read_parameter<bool>(
-          *this, std::string("dio") + std::to_string(i) + std::string("_input"),
-          false);
+        // param.name_ = read_parameter<std::string>(
+        //   *this, std::string("dio") + std::to_string(i) + std::string("_name"),
+        //   std::string("dio") + std::to_string(i));
+        param.name_ = read_parameter_or_die<std::string>(
+          *this, std::string("dio") + std::to_string(i) + std::string("_name"));
+        // param.output_ = read_parameter<bool>(
+        //   *this, std::string("dio") + std::to_string(i) + std::string("_output"),
+        //   true);
+        param.output_ = read_parameter_or_die<bool>(
+          *this, std::string("dio") + std::to_string(i) + std::string("_output"));
+        // param.input_ = read_parameter<bool>(
+        //   *this, std::string("dio") + std::to_string(i) + std::string("_input"),
+        //   false);
+        param.input_ = read_parameter_or_die<bool>(
+          *this, std::string("dio") + std::to_string(i) + std::string("_input"));
 
         if (param.output_)
         {
@@ -595,9 +639,11 @@ public:
               param.name_, 1, callback)));
         }
 
-        std::string output_default = read_parameter<std::string>(
-          *this, std::string("dio") + std::to_string(i) + std::string("_default"),
-          std::string("HIGH_IMPEDANCE"));
+        // std::string output_default = read_parameter<std::string>(
+        //   *this, std::string("dio") + std::to_string(i) + std::string("_default"),
+        //   std::string("HIGH_IMPEDANCE"));
+        std::string output_default = read_parameter_or_die<std::string>(
+          *this, std::string("dio") + std::to_string(i) + std::string("_default"));
         if (output_default.compare("HIGH_IMPEDANCE") == 0)
         {
         }
@@ -628,33 +674,41 @@ public:
     if (digital_input_enable_)
     {
       p_pub_digital_input_ = 
-        this->create_publisher<ypspur_ros::msg::DigitalInput>("digital_input",
+        this->create_publisher<ypspur_ros::msg::DigitalInput>(PUBLISH_TOPIC_DIGITAL_INPUT,
           rclcpp::QoS(rclcpp::KeepLast(2)));
     }
 
-    frames_["odom"] = read_parameter<std::string>(*this, "odom_id", std::string("odom"));
-    frames_["base_link"] = read_parameter<std::string>(*this, "base_link_id", std::string("base_link"));
-    frames_["origin"] = read_parameter<std::string>(*this, "origin_id", std::string(""));
-    params_["hz"] = read_parameter<double>(*this, "hz", 200.0);
+    // frames_["odom"] = read_parameter<std::string>(*this, "odom_frame_name", std::string("odom"));
+    frames_["odom"] = read_parameter_or_die<std::string>(*this, "odom_frame_name");
+    // frames_["base_link"] = read_parameter<std::string>(*this, "baselink_frame_name", std::string("base_link"));
+    frames_["base_link"] = read_parameter_or_die<std::string>(*this, "baselink_frame_name");
+    // frames_["origin"] = read_parameter<std::string>(*this, "ypspur_origin_frame_name", std::string(""));
+    frames_["origin"] = read_parameter_or_die<std::string>(*this, "ypspur_origin_frame_name");
+    // params_["hz"] = read_parameter<double>(*this, "hz", 200.0);
+    params_["hz"] = read_parameter_or_die<double>(*this, "hz");
 
-    std::string mode_name = read_parameter<std::string>(*this, "OdometryMode", std::string("diff"));
+    // std::string mode_name = read_parameter<std::string>(*this, "OdometryMode", std::string("diff"));
+    std::string mode_name = read_parameter_or_die<std::string>(*this, "OdometryMode");
     if (mode_name.compare("diff") == 0)
     {
       mode_ = DIFF;
       p_pub_wrench_stamped_ = 
         this->create_publisher<geometry_msgs::msg::WrenchStamped>(
-          "wrench", rclcpp::QoS(rclcpp::KeepLast(1)));
+          PUBLISH_TOPIC_WRENCH_STAMPED, rclcpp::QoS(rclcpp::KeepLast(1)));
       p_pub_odometry_ = 
         this->create_publisher<nav_msgs::msg::Odometry>(
-          "odom", rclcpp::QoS(rclcpp::KeepLast(1)));
+          PUBLISH_TOPIC_ODOM, rclcpp::QoS(rclcpp::KeepLast(1)));
       p_sub_cmd_vel_ = 
         this->create_subscription<geometry_msgs::msg::Twist>(
-          "cmd_vel", rclcpp::QoS(rclcpp::KeepLast(1)), 
+          SUBSCRIBE_TOPIC_COMMAND_VELOCITY, rclcpp::QoS(rclcpp::KeepLast(1)), 
             std::bind(&YpspurRosNode::cbCmdVel, this, std::placeholders::_1));
-      avoid_publishing_duplicated_odom_ = read_parameter<bool>(
-        *this, "avoid_publishing_duplicated_odom", true);
-      publish_odom_tf_ = read_parameter<bool>(
-        *this, "publish_odom_tf", true);
+      // avoid_publishing_duplicated_odom_ = read_parameter<bool>(
+      //   *this, "avoid_publishing_duplicated_odom", true);
+      avoid_publishing_duplicated_odom_ = read_parameter_or_die<bool>(
+        *this, "avoid_publishing_duplicated_odom");
+      // publish_odom_tf_ = read_parameter<bool>(
+      //   *this, "publish_odom_tf", true);
+      publish_odom_tf_ = read_parameter_or_die<bool>(*this, "publish_odom_tf");
     }
     else if (mode_name.compare("none") == 0)
     {
@@ -664,8 +718,10 @@ public:
       throw(std::runtime_error("unknown mode: " + mode_name));
     }
 
-    int max_joint_id = read_parameter<int>(*this, "max_joint_id", 32);
-    bool separated_joint = read_parameter<bool>(*this, "separated_joint_control", false);
+    // int max_joint_id = read_parameter<int>(*this, "max_joint_id", 32);
+    int max_joint_id = read_parameter_or_die<int>(*this, "max_joint_id");
+    // bool separated_joint = read_parameter<bool>(*this, "separated_joint_control", false);
+    bool separated_joint = read_parameter_or_die<bool>(*this, "separated_joint_control");
     int num = 0;
     for (int i = 0; i < max_joint_id; i++)
     {
@@ -674,14 +730,16 @@ public:
       if (this->get_parameter(name + std::string("_enable")).get_type() 
           != rclcpp::ParameterType::PARAMETER_NOT_SET)
       {
-        bool en = read_parameter<bool>(
-            *this, name + std::string("_enable"), false);
+        // bool en = read_parameter<bool>(*this, name + std::string("_enable"), false);
+        bool en = read_parameter_or_die<bool>(*this, name + std::string("_enable"));
         if (en)
         {
           JointParams jp;
           jp.id_ = i;
-          jp.name_ = read_parameter<std::string>(*this, name + std::string("_name"), name);
-          jp.accel_ = read_parameter<double>(*this, name + std::string("_accel"), 3.14);
+          // jp.name_ = read_parameter<std::string>(*this, name + std::string("_name"), name);
+          jp.name_ = read_parameter_or_die<std::string>(*this, name + std::string("_name"));
+          // jp.accel_ = read_parameter<double>(*this, name + std::string("_accel"), 3.14);
+          jp.accel_ = read_parameter_or_die<double>(*this, name + std::string("_accel"));
           joint_name_to_num_[jp.name_] = num;
           joints_.push_back(jp);
           // printf("%s %d %d", jp.name_.c_str(), jp.id_, joint_name_to_num_[jp.name_]);
@@ -722,7 +780,7 @@ public:
           }
           p_sub_joint_pos_ = 
             this->create_subscription<ypspur_ros::msg::JointPositionControl>(
-              std::string("joint_position"), rclcpp::QoS(rclcpp::KeepLast(1)), 
+              SUBSCRIBE_TOPIC_JOINTSTATE, rclcpp::QoS(rclcpp::KeepLast(1)), 
               std::bind(&YpspurRosNode::cbJointPosition, this, std::placeholders::_1));
           num++;
         }
@@ -731,19 +789,19 @@ public:
     if (joints_.size() > 0)
     {
       p_pub_joint_state_ = 
-        this->create_publisher<sensor_msgs::msg::JointState>("joint_states", rclcpp::QoS(rclcpp::KeepLast(2)));
+        this->create_publisher<sensor_msgs::msg::JointState>(PUBLISH_TOPIC_JOINT_STATES, rclcpp::QoS(rclcpp::KeepLast(2)));
       p_sub_joint_traj_ = 
         this->create_subscription<trajectory_msgs::msg::JointTrajectory>(
-          "joint_trajectory", rclcpp::QoS(rclcpp::KeepLast(joints_.size() * 2)), 
+          SUBSCRIBE_TOPIC_JOINT_TRAJECTORY, rclcpp::QoS(rclcpp::KeepLast(joints_.size() * 2)), 
           std::bind(&YpspurRosNode::cbJoint, this, std::placeholders::_1));
     }
     p_sub_ctrl_mode_ = this->create_subscription<ypspur_ros::msg::ControlMode>(
-          "control_mode", rclcpp::QoS(rclcpp::KeepLast(1)), 
+          SUBSCRIBE_TOPIC_CONTROL_MODE, rclcpp::QoS(rclcpp::KeepLast(1)), 
           std::bind(&YpspurRosNode::cbControlMode, this, std::placeholders::_1));
     control_mode_ = ypspur_ros::msg::ControlMode::VELOCITY;
 
     p_pubs_diag_array_ = this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
-      "/diagnostics", rclcpp::QoS(rclcpp::KeepLast(1)));
+      PUBLISH_TOPIC_DIAGNOSTICS, rclcpp::QoS(rclcpp::KeepLast(1)));
 
     pid_ = 0;
     for (int i = 0; i < 2; i++)
@@ -867,10 +925,14 @@ public:
     if (this->get_parameter("angacc").get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET)
       RCLCPP_WARN(this->get_logger(), "default \"angacc\" %0.3f used", (float)params_["angacc"]);
 
-    params_["vel"] = read_parameter<double>(*this, "vel", params_["vel"]);
-    params_["acc"] = read_parameter<double>(*this, "acc", params_["acc"]);
-    params_["angvel"] = read_parameter<double>(*this, "angvel", params_["angvel"]);
-    params_["angacc"] = read_parameter<double>(*this, "angacc", params_["angacc"]);
+    // params_["vel"] = read_parameter<double>(*this, "vel", params_["vel"]);
+    params_["vel"] = read_parameter_or_die<double>(*this, "vel");
+    // params_["acc"] = read_parameter<double>(*this, "acc", params_["acc"]);
+    params_["acc"] = read_parameter_or_die<double>(*this, "acc");
+    // params_["angvel"] = read_parameter<double>(*this, "angvel", params_["angvel"]);
+    params_["angvel"] = read_parameter_or_die<double>(*this, "angvel");
+    // params_["angacc"] = read_parameter<double>(*this, "angacc", params_["angacc"]);
+    params_["angacc"] = read_parameter_or_die<double>(*this, "angacc");
 
     YP::YPSpur_set_vel(params_["vel"]);
     YP::YPSpur_set_accel(params_["acc"]);
