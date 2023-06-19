@@ -112,7 +112,7 @@ void sigintHandler(int)
 template <typename T>
 T read_parameter_or_die(rclcpp::Node &node, const std::string &param_name) {
   T value;
-  CHECK(node.get_parameter(param_name, value));
+  CHECK(node.get_parameter(param_name, value)) << param_name << " is not read!";
   return value;
 }
 
@@ -232,6 +232,7 @@ private:
 
   void cbControlMode(const ypspur_ros::msg::ControlMode::ConstSharedPtr& msg)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbControlMode");
     control_mode_ = msg->vehicle_control_mode;
     switch (control_mode_)
     {
@@ -247,6 +248,7 @@ private:
   }
   void cbCmdVel(const geometry_msgs::msg::Twist::ConstSharedPtr& msg)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbCmdVel");
     cmd_vel_ = msg;
     cmd_vel_time_ = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
     if (control_mode_ == ypspur_ros::msg::ControlMode::VELOCITY)
@@ -256,6 +258,7 @@ private:
   }
   void cbJoint(const trajectory_msgs::msg::JointTrajectory::ConstSharedPtr& msg)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbJoint");
     const rclcpp::Time now = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
 
     std_msgs::msg::Header header = msg->header;
@@ -313,18 +316,21 @@ private:
   }
   void cbSetVel(const std_msgs::msg::Float32::ConstSharedPtr& msg, int num)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbSetVel");
     // printf("set_vel %d %d %f\n", num, joints_[num].id_, msg->data);
     joints_[num].vel_ = msg->data;
     YP::YP_set_joint_vel(joints_[num].id_, joints_[num].vel_);
   }
   void cbSetAccel(const std_msgs::msg::Float32::ConstSharedPtr& msg, int num)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbSetAccel");
     // printf("set_accel %d %d %f\n", num, joints_[num].id_, msg->data);
     joints_[num].accel_ = msg->data;
     YP::YP_set_joint_accel(joints_[num].id_, joints_[num].accel_);
   }
   void cbVel(const std_msgs::msg::Float32::ConstSharedPtr& msg, int num)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbVel");
     // printf("vel_ %d %d %f\n", num, joints_[num].id_, msg->data);
     joints_[num].vel_ref_ = msg->data;
     joints_[num].control_ = JointParams::VELOCITY;
@@ -332,12 +338,14 @@ private:
   }
   void cbAngle(const std_msgs::msg::Float32::ConstSharedPtr& msg, int num)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbAngle");
     joints_[num].angle_ref_ = msg->data;
     joints_[num].control_ = JointParams::POSITION;
     YP::YP_joint_ang(joints_[num].id_, joints_[num].angle_ref_);
   }
   void cbJointPosition(const ypspur_ros::msg::JointPositionControl::ConstSharedPtr& msg)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbJointPosition");
     int i = 0;
     for (auto& name : msg->joint_names)
     {
@@ -362,6 +370,7 @@ private:
 
   void cbDigitalOutput(const ypspur_ros::msg::DigitalOutput::ConstSharedPtr& msg, int id_)
   {
+    RCLCPP_ERROR(this->get_logger(), "cbDigitalOutput");
     const auto dio_output_prev = dio_output_;
     const auto dio_dir_prev = dio_dir_;
     const unsigned int mask = 1 << id_;
@@ -418,6 +427,7 @@ private:
   }
   void updateDiagnostics(const rclcpp::Time& now, const bool connection_down = false)
   {
+    RCLCPP_ERROR(this->get_logger(), "I am here 70");
     const int connection_error = connection_down ? 1 : YP::YP_get_error_state();
     double t = 0;
 
@@ -481,6 +491,7 @@ private:
       p_pubs_diag_array_->publish(msg);
       device_error_state_ = 0;
     }
+    RCLCPP_ERROR(this->get_logger(), "I am here 71");
   }
 
 public:
@@ -529,14 +540,14 @@ public:
     , dio_revert_{}
     , device_error_state_(0)
     , device_error_state_prev_(0)
-    , device_error_state_time_(0)
+    , device_error_state_time_(0, 0, rcl_clock_type_t::RCL_ROS_TIME)
     , cmd_vel_{}
-    , cmd_vel_time_{}
+    , cmd_vel_time_(0, 0, rcl_clock_type_t::RCL_ROS_TIME)
     , cmd_vel_expire_(0, 0)
     , control_mode_{}
     , avoid_publishing_duplicated_odom_(true)
     , publish_odom_tf_(true)
-    , previous_odom_stamp_{}
+    , previous_odom_stamp_(0, 0, rcl_clock_type_t::RCL_ROS_TIME)
   {
     // X. Initialize Tf.
     p_tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -607,6 +618,10 @@ public:
     dios_.resize(DIO_NUM_);
     for (int i = 0; i < DIO_NUM_; i++)
     {
+      // X. Initialize.
+      dio_revert_.insert(std::make_pair(i, rclcpp::Time(0, 0, rcl_clock_type_t::RCL_ROS_TIME)));
+
+      // X. Create paramters.
       DioParams param;
       // param.enable_ = read_parameter<bool>(
       //   *this, std::string("dio") + std::to_string(i) + std::string("_enable"), false);
@@ -942,7 +957,7 @@ public:
     YP::YP_set_io_data(dio_output_);
     YP::YP_set_io_dir(dio_dir_);
 
-    executor_.add_node(this->shared_from_this());
+    executor_.add_node(this->get_node_base_interface());
   }
   ~YpspurRosNode()
   {
@@ -1001,6 +1016,7 @@ public:
     rclcpp::Rate loop(params_["hz"]);
     while (!g_shutdown)
     {
+      RCLCPP_ERROR(this->get_logger(), "I am here 1");
       const rclcpp::Time now = this->get_clock()->now();
       const float dt = 1.0 / params_["hz"];
 
@@ -1015,6 +1031,7 @@ public:
         }
       }
 
+      RCLCPP_ERROR(this->get_logger(), "I am here 1");
       if (mode_ == DIFF)
       {
         double x, y, yaw, v(0), w(0);
@@ -1102,6 +1119,7 @@ public:
           }
         }
       }
+      RCLCPP_ERROR(this->get_logger(), "I am here 3");
       if (joints_.size() > 0)
       {
         double t;
@@ -1368,7 +1386,7 @@ public:
           }
         }
       }
-
+      RCLCPP_ERROR(this->get_logger(), "I am here 4");
       for (int i = 0; i < AD_NUM_; i++)
       {
         if (ads_[i].enable_)
@@ -1378,7 +1396,7 @@ public:
           p_pubs_ad_values_.at("ad/" + ads_[i].name_)->publish(ad);
         }
       }
-
+      RCLCPP_ERROR(this->get_logger(), "I am here 5");
       if (digital_input_enable_)
       {
         ypspur_ros::msg::DigitalInput din;
@@ -1397,7 +1415,7 @@ public:
         }
         p_pub_digital_input_->publish(din);
       }
-
+      RCLCPP_ERROR(this->get_logger(), "I am here 6");
       for (int i = 0; i < DIO_NUM_; i++)
       {
         if (dio_revert_[i] != rclcpp::Time(static_cast<int64_t>(0), rcl_clock_type_t::RCL_ROS_TIME))
@@ -1409,12 +1427,16 @@ public:
         }
       }
       updateDiagnostics(now);
-
+      RCLCPP_ERROR(this->get_logger(), "I am here 7");
       if (YP::YP_get_error_state())
         break;
+      RCLCPP_ERROR(this->get_logger(), "I am here 75");
 
       executor_.spin_once();
+      RCLCPP_ERROR(this->get_logger(), "I am here 75-1");
       loop.sleep();
+
+      RCLCPP_ERROR(this->get_logger(), "I am here 79");
 
       int status;
       if (waitpid(pid_, &status, WNOHANG) == pid_)
@@ -1440,7 +1462,7 @@ public:
       }
     }
     RCLCPP_INFO(this->get_logger(), "ypspur_ros main loop terminated");
-
+    RCLCPP_ERROR(this->get_logger(), "I am here 8");
     if (YP::YP_get_error_state())
     {
       RCLCPP_ERROR(this->get_logger(), "ypspur-coordinator is not active");
