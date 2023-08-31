@@ -122,7 +122,7 @@ T read_parameter_or_die(rclcpp::Node &node, const std::string &param_name) {
 class YpspurRosNode : public rclcpp::Node 
 {
 private:
-  rclcpp::executors::SingleThreadedExecutor executor_;
+  rclcpp::executors::MultiThreadedExecutor executor_;
 
   // X. Publishers
   rclcpp::Publisher<ypspur_ros::msg::DigitalInput>::SharedPtr p_pub_digital_input_;
@@ -1423,8 +1423,9 @@ public:
       if (YP::YP_get_error_state())
         break;
 
-      executor_.spin_once();
+      executor_.spin_once(std::chrono::duration<int64_t, std::milli>(1));
       loop.sleep();
+      RCLCPP_INFO(this->get_logger(), "Time: %lf", (this->get_clock()->now() - now).seconds());
 
       int status;
       if (waitpid(pid_, &status, WNOHANG) == pid_)
