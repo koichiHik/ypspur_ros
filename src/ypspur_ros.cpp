@@ -1425,7 +1425,7 @@ public:
 
       executor_.spin_once(std::chrono::duration<int64_t, std::milli>(1));
       loop.sleep();
-      RCLCPP_INFO(this->get_logger(), "Time: %lf", (this->get_clock()->now() - now).seconds());
+      // RCLCPP_INFO(this->get_logger(), "Time: %lf", (this->get_clock()->now() - now).seconds());
 
       int status;
       if (waitpid(pid_, &status, WNOHANG) == pid_)
