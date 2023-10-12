@@ -155,6 +155,7 @@ private:
   bool simulate_;
   bool simulate_control_;
 
+  double last_joint_t_;
   double tf_time_offset_;
 
   pid_t pid_;
@@ -523,6 +524,7 @@ public:
     , key_{}
     , simulate_{}
     , simulate_control_{}
+    , last_joint_t_(-1.0)
     , tf_time_offset_{}
     , pid_{}
     , mode_{}
@@ -1146,11 +1148,17 @@ public:
                 t = -1.0;
                 break;
               }
+              if (last_joint_t_ == t) {
+                // Retry if message timestamp is same as that of the last.
+                t = -1.0;
+                break;
+              }
               i++;
             }
           }
           if (t <= 0.0)
             break;
+          last_joint_t_ = t;
           joint.header.stamp = rclcpp::Time(static_cast<int64_t>(t * 1e9), rcl_clock_type_t::RCL_ROS_TIME);
         }
         else
