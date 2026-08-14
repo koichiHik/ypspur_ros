@@ -1123,7 +1123,9 @@ public:
         if (!simulate_control_)
         {
           t = -1.0;
-          while (t < 0.0)
+          const auto joint_state_deadline =
+              std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+          while (t < 0.0 && !g_shutdown)
           {
             int i = 0;
             for (auto& j : joints_)
@@ -1151,9 +1153,17 @@ public:
               if (last_joint_t_ == t) {
                 // Retry if message timestamp is same as that of the last.
                 t = -1.0;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 break;
               }
               i++;
+            }
+            if (t < 0.0 && std::chrono::steady_clock::now() >= joint_state_deadline)
+            {
+              RCLCPP_ERROR(
+                  this->get_logger(),
+                  "Joint state timestamp did not update within 100 ms");
+              return false;
             }
           }
           if (t <= 0.0)
