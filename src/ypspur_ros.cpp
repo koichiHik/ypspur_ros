@@ -67,6 +67,7 @@
 #include <sys/wait.h>
 
 // STL
+#include <cmath>
 #include <exception>
 #include <map>
 #include <string>
@@ -99,6 +100,8 @@ const std::string SUBSCRIBE_TOPIC_COMMAND_VELOCITY = "cmd_vel";
 const std::string SUBSCRIBE_TOPIC_JOINTSTATE = "joint_position";
 const std::string SUBSCRIBE_TOPIC_JOINT_TRAJECTORY = "joint_trajectory";
 const std::string SUBSCRIBE_TOPIC_CONTROL_MODE = "control_mode";
+
+using SteadyClock = std::chrono::steady_clock;
 
 /**
  * Definition at file scope.
@@ -215,15 +218,15 @@ private:
   unsigned int dio_dir_default_;
 
   static const int DIO_NUM_ = 8;
-  std::map<int, rclcpp::Time> dio_revert_;
+  std::map<int, SteadyClock::time_point> dio_revert_;
 
   int device_error_state_;
   int device_error_state_prev_;
-  rclcpp::Time device_error_state_time_;
+  SteadyClock::time_point device_error_report_time_;
 
   geometry_msgs::msg::Twist::ConstSharedPtr cmd_vel_;
-  rclcpp::Time cmd_vel_time_;
-  rclcpp::Duration cmd_vel_expire_;
+  SteadyClock::time_point cmd_vel_time_;
+  std::chrono::duration<double> cmd_vel_expire_;
 
   int control_mode_;
 
@@ -251,7 +254,7 @@ private:
   {
     // RCLCPP_INFO(this->get_logger(), "cbCmdVel");
     cmd_vel_ = msg;
-    cmd_vel_time_ = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
+    cmd_vel_time_ = SteadyClock::now();
     if (control_mode_ == ypspur_ros::msg::ControlMode::VELOCITY)
     {
       YP::YPSpur_vel(msg->linear.x, msg->angular.z);
@@ -403,9 +406,11 @@ private:
     if (dio_dir_ != dio_dir_prev)
       YP::YP_set_io_dir(dio_dir_);
 
-    if (rclcpp::Duration(msg->toggle_time) > rclcpp::Duration::from_seconds(0.0))
+    const rclcpp::Duration toggle_duration(msg->toggle_time);
+    if (toggle_duration > rclcpp::Duration::from_seconds(0.0))
     {
-      dio_revert_[id_] = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now() + msg->toggle_time;
+      dio_revert_[id_] = SteadyClock::now() +
+        std::chrono::nanoseconds(toggle_duration.nanoseconds());
     }
   }
   void revertDigitalOutput(int id_)
@@ -424,9 +429,11 @@ private:
     if (dio_dir_ != dio_dir_prev)
       YP::YP_set_io_dir(dio_dir_);
 
-    dio_revert_[id_] = rclcpp::Time(static_cast<int64_t>(0), rcl_clock_type_t::RCL_ROS_TIME);
+    dio_revert_[id_] = SteadyClock::time_point{};
   }
-  void updateDiagnostics(const rclcpp::Time& now, const bool connection_down = false)
+  void updateDiagnostics(const rclcpp::Time& now,
+                         const SteadyClock::time_point steady_now,
+                         const bool connection_down = false)
   {
     const int connection_error = connection_down ? 1 : YP::YP_get_error_state();
     double t = 0;
@@ -436,10 +443,11 @@ private:
       t = YP::YP_get_device_error_state(0, &err);
     device_error_state_ |= err;
 
-    if (device_error_state_time_ + rclcpp::Duration::from_seconds(1.0) < now || connection_down ||
+    if (device_error_report_time_ == SteadyClock::time_point{} ||
+        device_error_report_time_ + std::chrono::seconds(1) < steady_now || connection_down ||
         device_error_state_ != device_error_state_prev_)
     {
-      device_error_state_time_ = now;
+      device_error_report_time_ = steady_now;
       device_error_state_prev_ = device_error_state_;
 
       diagnostic_msgs::msg::DiagnosticArray msg;
@@ -540,10 +548,10 @@ public:
     , dio_revert_{}
     , device_error_state_(0)
     , device_error_state_prev_(0)
-    , device_error_state_time_(0, 0, rcl_clock_type_t::RCL_ROS_TIME)
+    , device_error_report_time_(SteadyClock::time_point{})
     , cmd_vel_{}
-    , cmd_vel_time_(0, 0, rcl_clock_type_t::RCL_ROS_TIME)
-    , cmd_vel_expire_(0, 0)
+    , cmd_vel_time_{}
+    , cmd_vel_expire_(0.0)
     , control_mode_{}
     , avoid_publishing_duplicated_odom_(true)
     , publish_odom_tf_(true)
@@ -577,7 +585,8 @@ public:
     {
       //double cmd_vel_expire_s = read_parameter<double>(*this, "cmd_vel_expire", -1.0);
       double cmd_vel_expire_s = read_parameter_or_die<double>(*this, "cmd_vel_expire");
-      cmd_vel_expire_ = rclcpp::Duration::from_seconds(cmd_vel_expire_s);
+      CHECK(std::isfinite(cmd_vel_expire_s)) << "cmd_vel_expire must be finite";
+      cmd_vel_expire_ = std::chrono::duration<double>(cmd_vel_expire_s);
     }
 
     // X. Read parameters for ad.
@@ -619,7 +628,7 @@ public:
     for (int i = 0; i < DIO_NUM_; i++)
     {
       // X. Initialize.
-      dio_revert_.insert(std::make_pair(i, rclcpp::Time(0, 0, rcl_clock_type_t::RCL_ROS_TIME)));
+      dio_revert_.insert(std::make_pair(i, SteadyClock::time_point{}));
 
       // X. Create paramters.
       DioParams param;
@@ -1013,15 +1022,16 @@ public:
     }
 
     RCLCPP_INFO(this->get_logger(), "ypspur_ros main loop started");
-    rclcpp::Rate loop(params_["hz"]);
+    rclcpp::WallRate loop(params_["hz"]);
     while (!g_shutdown)
     {
       const rclcpp::Time now = this->get_clock()->now();
+      const SteadyClock::time_point steady_now = SteadyClock::now();
       const float dt = 1.0 / params_["hz"];
 
-      if (cmd_vel_ && cmd_vel_expire_ > rclcpp::Duration::from_seconds(0.0))
+      if (cmd_vel_ && cmd_vel_expire_ > std::chrono::duration<double>::zero())
       {
-        if (cmd_vel_time_ + cmd_vel_expire_ < now)
+        if (cmd_vel_time_ + cmd_vel_expire_ < steady_now)
         {
           // cmd_vel is too old and expired
           cmd_vel_ = nullptr;
@@ -1428,15 +1438,15 @@ public:
       }
       for (int i = 0; i < DIO_NUM_; i++)
       {
-        if (dio_revert_[i] != rclcpp::Time(static_cast<int64_t>(0), rcl_clock_type_t::RCL_ROS_TIME))
+        if (dio_revert_[i] != SteadyClock::time_point{})
         {
-          if (dio_revert_[i] < now)
+          if (dio_revert_[i] < steady_now)
           {
             revertDigitalOutput(i);
           }
         }
       }
-      updateDiagnostics(now);
+      updateDiagnostics(now, steady_now);
 
       if (YP::YP_get_error_state())
         break;
@@ -1463,7 +1473,7 @@ public:
           {
             RCLCPP_ERROR(this->get_logger(), "ypspur-coordinator dead");
           }
-          updateDiagnostics(now, true);
+          updateDiagnostics(now, steady_now, true);
         }
         break;
       }
