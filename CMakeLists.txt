@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(common_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -75,6 +76,7 @@ target_link_libraries(ypspur_ros_node
 ament_target_dependencies(ypspur_ros_node
   rclcpp
   builtin_interfaces
+  common_msgs
   std_msgs
   sensor_msgs
   trajectory_msgs

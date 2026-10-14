@@ -35,6 +35,7 @@
 #include "ypspur_ros/msg/joint_position_control.hpp"
 
 // Message (ROS)
+#include "common_msgs/msg/motion_decision_event.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
@@ -75,6 +76,10 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <charconv>
+#include <cstdint>
+#include <cstdlib>
+#include <string_view>
 
 // #include <compatibility.h>
 
@@ -94,6 +99,7 @@ const std::string PUBLISH_TOPIC_WRENCH_STAMPED = "wrench";
 const std::string PUBLISH_TOPIC_ODOM = "odom";
 const std::string PUBLISH_TOPIC_JOINT_STATES = "joint_states";
 const std::string PUBLISH_TOPIC_DIAGNOSTICS = "diagnostics";
+const std::string PUBLISH_TOPIC_MOTION_DECISION = "/motion_decision_event";
 
 // X. Subscribe.
 const std::string SUBSCRIBE_TOPIC_COMMAND_VELOCITY = "cmd_vel";
@@ -102,6 +108,26 @@ const std::string SUBSCRIBE_TOPIC_JOINT_TRAJECTORY = "joint_trajectory";
 const std::string SUBSCRIBE_TOPIC_CONTROL_MODE = "control_mode";
 
 using SteadyClock = std::chrono::steady_clock;
+
+std::uint64_t readMotionAuditRunGeneration()
+{
+  constexpr std::uint64_t kStandaloneGeneration = 1U;
+  const char* raw = std::getenv("MOTION_AUDIT_RUN_GENERATION");
+  if (raw == nullptr || *raw == '\0')
+    return kStandaloneGeneration;
+  const std::string_view text(raw);
+  std::uint64_t value = 0U;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value == 0U)
+    return kStandaloneGeneration;
+  return value;
+}
+
+bool isExactZero(const geometry_msgs::msg::Twist& command)
+{
+  return command.linear.x == 0.0 && command.linear.y == 0.0 && command.linear.z == 0.0 &&
+         command.angular.x == 0.0 && command.angular.y == 0.0 && command.angular.z == 0.0;
+}
 
 /**
  * Definition at file scope.
@@ -133,6 +159,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr p_pub_odometry_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr p_pub_joint_state_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr p_pubs_diag_array_;
+  rclcpp::Publisher<common_msgs::msg::MotionDecisionEvent>::SharedPtr p_pub_motion_decision_;
   std::map<std::string, rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr> p_pubs_ad_values_;
 
   // X. Subscribers
@@ -229,10 +256,65 @@ private:
   std::chrono::duration<double> cmd_vel_expire_;
 
   int control_mode_;
+  const std::uint64_t motion_audit_run_generation_;
+  std::atomic<std::uint64_t> motion_decision_sequence_;
 
   bool avoid_publishing_duplicated_odom_;
   bool publish_odom_tf_;
   rclcpp::Time previous_odom_stamp_;
+
+  void publishMotionDecision(const std::string& reason,
+                             const geometry_msgs::msg::Twist* requested_command,
+                             const geometry_msgs::msg::Twist* final_command,
+                             const std::string& detail = std::string())
+  {
+    // Audit evidence is deliberately fail-open: allocation or DDS failures
+    // must not alter a command that was already handed to YP-Spur.
+    try
+    {
+      if (!p_pub_motion_decision_)
+        return;
+      using Event = common_msgs::msg::MotionDecisionEvent;
+      Event event;
+      event.schema_version = Event::SCHEMA_VERSION;
+      event.stamp = this->get_clock()->now();
+      event.run_generation = motion_audit_run_generation_;
+      event.source_sequence = motion_decision_sequence_.fetch_add(1U) + 1U;
+      event.audit_event_id = 0U;
+      event.source = "ypspur";
+      event.primary_reason = reason;
+      event.detail = detail;
+      event.waypoint_index = -1;
+      event.authority = Event::AUTHORITY_NONE;
+      if (requested_command != nullptr)
+      {
+        event.requested_command_valid = true;
+        event.requested_command = *requested_command;
+      }
+      if (final_command != nullptr)
+      {
+        event.final_command_valid = true;
+        event.final_command = *final_command;
+        event.decision = isExactZero(*final_command) ? Event::DECISION_ZERO
+                                                     : Event::DECISION_NONZERO;
+      }
+      else
+      {
+        event.decision = Event::DECISION_NO_COMMAND;
+      }
+      event.condition_names = {"CONTROL_MODE_VELOCITY", "DEVICE_ERROR_FREE"};
+      event.condition_states = {
+        control_mode_ == ypspur_ros::msg::ControlMode::VELOCITY ? Event::CONDITION_TRUE
+                                                                : Event::CONDITION_FALSE,
+        device_error_state_ == 0 ? Event::CONDITION_TRUE : Event::CONDITION_FALSE};
+      p_pub_motion_decision_->publish(event);
+    }
+    catch (...)
+    {
+      // Driver diagnostics and the recorder's sequence-gap monitor expose
+      // missing evidence without making logging a motor-control dependency.
+    }
+  }
 
   void cbControlMode(const ypspur_ros::msg::ControlMode::ConstSharedPtr& msg)
   {
@@ -242,11 +324,20 @@ private:
     {
       case ypspur_ros::msg::ControlMode::OPEN:
         YP::YP_openfree();
+        publishMotionDecision("CONTROL_MODE_OPEN", nullptr, nullptr,
+                              "motor mode changed; this is not a Twist application ACK");
         break;
       case ypspur_ros::msg::ControlMode::TORQUE:
         YP::YPSpur_free();
+        publishMotionDecision("CONTROL_MODE_TORQUE", nullptr, nullptr,
+                              "motor mode changed; this is not a Twist application ACK");
         break;
       case ypspur_ros::msg::ControlMode::VELOCITY:
+        publishMotionDecision("CONTROL_MODE_VELOCITY", nullptr, nullptr);
+        break;
+      default:
+        publishMotionDecision("CONTROL_MODE_INVALID", nullptr, nullptr,
+                              "unsupported vehicle_control_mode");
         break;
     }
   }
@@ -258,6 +349,15 @@ private:
     if (control_mode_ == ypspur_ros::msg::ControlMode::VELOCITY)
     {
       YP::YPSpur_vel(msg->linear.x, msg->angular.z);
+      geometry_msgs::msg::Twist applied_command;
+      applied_command.linear.x = msg->linear.x;
+      applied_command.angular.z = msg->angular.z;
+      publishMotionDecision("COMMAND_HANDED_TO_YPSPUR_API", msg.get(), &applied_command);
+    }
+    else
+    {
+      publishMotionDecision("COMMAND_RECEIVED_NOT_APPLIED", msg.get(), nullptr,
+                            "vehicle control mode is not VELOCITY");
     }
   }
   void cbJoint(const trajectory_msgs::msg::JointTrajectory::ConstSharedPtr& msg)
@@ -497,6 +597,22 @@ private:
       msg.status[0].values[1].value = std::to_string(device_error_state_);
 
       p_pubs_diag_array_->publish(msg);
+      if (connection_error)
+      {
+        publishMotionDecision("CONNECTION_DOWN", nullptr, nullptr, msg.status[0].message);
+      }
+      else if (device_error_state_ != 0)
+      {
+        publishMotionDecision("DEVICE_ERROR", nullptr, nullptr, msg.status[0].message);
+      }
+      else if (msg.status[0].level == diagnostic_msgs::msg::DiagnosticStatus::ERROR)
+      {
+        publishMotionDecision("DEVICE_STATE_STALE", nullptr, nullptr, msg.status[0].message);
+      }
+      else
+      {
+        publishMotionDecision("DEVICE_OK", nullptr, nullptr, msg.status[0].message);
+      }
       device_error_state_ = 0;
     }
   }
@@ -513,6 +629,7 @@ public:
     , p_pub_odometry_()
     , p_pub_joint_state_()
     , p_pubs_diag_array_()
+    , p_pub_motion_decision_()
     , p_pubs_ad_values_()
     , p_sub_cmd_vel_()
     , p_sub_joint_pos_()
@@ -553,6 +670,8 @@ public:
     , cmd_vel_time_{}
     , cmd_vel_expire_(0.0)
     , control_mode_{}
+    , motion_audit_run_generation_(readMotionAuditRunGeneration())
+    , motion_decision_sequence_(0U)
     , avoid_publishing_duplicated_odom_(true)
     , publish_odom_tf_(true)
     , previous_odom_stamp_(0, 0, rcl_clock_type_t::RCL_ROS_TIME)
@@ -824,6 +943,19 @@ public:
           std::bind(&YpspurRosNode::cbControlMode, this, std::placeholders::_1));
     control_mode_ = ypspur_ros::msg::ControlMode::VELOCITY;
 
+    try
+    {
+      p_pub_motion_decision_ = this->create_publisher<common_msgs::msg::MotionDecisionEvent>(
+        PUBLISH_TOPIC_MOTION_DECISION, rclcpp::QoS(rclcpp::KeepLast(200)).best_effort());
+    }
+    catch (...)
+    {
+      // Motor control must remain available when optional audit DDS setup fails.
+      p_pub_motion_decision_.reset();
+    }
+    publishMotionDecision("INITIAL_CONTROL_MODE_VELOCITY", nullptr, nullptr,
+                          "startup default before the first GUI control-mode heartbeat");
+
     p_pubs_diag_array_ = this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
       PUBLISH_TOPIC_DIAGNOSTICS, rclcpp::QoS(rclcpp::KeepLast(1)));
 
@@ -1034,9 +1166,20 @@ public:
         if (cmd_vel_time_ + cmd_vel_expire_ < steady_now)
         {
           // cmd_vel is too old and expired
+          const geometry_msgs::msg::Twist expired_command = *cmd_vel_;
           cmd_vel_ = nullptr;
           if (control_mode_ == ypspur_ros::msg::ControlMode::VELOCITY)
+          {
             YP::YPSpur_vel(0.0, 0.0);
+            const geometry_msgs::msg::Twist zero;
+            publishMotionDecision("CMD_VEL_WATCHDOG_EXPIRED_AND_ZERO_APPLIED",
+                                  &expired_command, &zero);
+          }
+          else
+          {
+            publishMotionDecision("CMD_VEL_EXPIRED_NON_VELOCITY", &expired_command, nullptr,
+                                  "cached command cleared without a YP-Spur API call");
+          }
         }
       }
 
@@ -1049,7 +1192,11 @@ public:
         {
           t = YP::YPSpur_get_pos(YP::CS_BS, &x, &y, &yaw);
           if (t <= 0.0)
+          {
+            publishMotionDecision("ODOMETRY_READ_FAILED", nullptr, nullptr,
+                                  "YPSpur_get_pos timestamp=" + std::to_string(t));
             break;
+          }
           YP::YPSpur_get_vel(&v, &w);
         }
         else
@@ -1094,7 +1241,11 @@ public:
         {
           t = YP::YPSpur_get_force(&wrench.wrench.force.x, &wrench.wrench.torque.z);
           if (t <= 0.0)
+          {
+            publishMotionDecision("WRENCH_READ_FAILED", nullptr, nullptr,
+                                  "YPSpur_get_force timestamp=" + std::to_string(t));
             break;
+          }
         }
         wrench.header.stamp = rclcpp::Time(static_cast<int64_t>(t * 1e9), rcl_clock_type_t::RCL_ROS_TIME);;
         wrench.wrench.force.y = 0;
@@ -1461,6 +1612,8 @@ public:
         if (WIFEXITED(status))
         {
           RCLCPP_ERROR(this->get_logger(), "ypspur-coordinator exited");
+          publishMotionDecision("COORDINATOR_EXITED", nullptr, nullptr,
+                                "ypspur-coordinator exited normally");
         }
         else
         {
